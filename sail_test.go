@@ -1,13 +1,17 @@
 package sail
 
 import (
+	"context"
 	"os"
 	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/spf13/pflag"
+	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
+	"go.etcd.io/etcd/api/v3/mvccpb"
+	clientv3 "go.etcd.io/etcd/client/v3"
 )
 
 func TestNewWithEnv(t *testing.T) {
@@ -165,4 +169,185 @@ func Test_intersectionSortStringArr(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSail_getETCDKeyPrefix(t *testing.T) {
+	type fields struct {
+		metaConfig *MetaConfig
+	}
+	tests := []struct {
+		name   string
+		fields fields
+		want   string
+	}{
+		{
+			name: "Test1",
+			fields: fields{
+				metaConfig: &MetaConfig{
+					ProjectKey: "test_project_key",
+					Namespace:  "test",
+				},
+			},
+			want: "/conf/test_project_key/test/",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := &Sail{
+				metaConfig: tt.fields.metaConfig,
+			}
+			if got := s.getETCDKeyPrefix(); got != tt.want {
+				t.Errorf("getETCDKeyPrefix() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func Test_getConfigFileKeyFrom(t *testing.T) {
+	type args struct {
+		etcdKey string
+	}
+	tests := []struct {
+		name string
+		args args
+		want string
+	}{
+		{
+			name: "Test",
+			args: args{
+				etcdKey: "/conf/project_key/test/mysql.toml",
+			},
+			want: "mysql.toml",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := getConfigFileKeyFrom(tt.args.etcdKey); got != tt.want {
+				t.Errorf("getConfigFileKeyFrom() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSail_pullETCDConfig(t *testing.T) {
+	tests := []struct {
+		name     string
+		configs  []string
+		response *clientv3.GetResponse
+	}{
+		{
+			name:    "TEST1",
+			configs: []string{"mysql.toml", "redis.properties"},
+			response: &clientv3.GetResponse{
+				Kvs: []*mvccpb.KeyValue{
+					{
+						Key:   []byte("/conf/test_project_key/test/mysql.toml"),
+						Value: []byte("database=\"127.0.0.1:3306\""),
+					},
+					// redis.properties
+					// host=0.0.0.0
+					// port=6379
+					{
+						Key:   []byte("/conf/test_project_key/test/redis.properties"),
+						Value: []byte("I9IfkJSBekxeYbQJSX6zQsvZJwlfj3VyZ6RrtRF4LFI="),
+					},
+				},
+			},
+		},
+		{
+			name:    "TEST2",
+			configs: []string{"mysql.toml"},
+			response: &clientv3.GetResponse{
+				Kvs: []*mvccpb.KeyValue{
+					{
+						Key:   []byte("/conf/test_project_key/test/mysql.toml"),
+						Value: []byte("database=\"127.0.0.1:3306\""),
+					},
+					{
+						Key:   []byte("/conf/test_project_key/test/redis.properties"),
+						Value: []byte("I9IfkJSBekxeYbQJSX6zQsvZJwlfj3VyZ6RrtRF4LFI="),
+					},
+				},
+			},
+		}, {
+			name:    "TEST3",
+			configs: []string{"cfg.custom"},
+			response: &clientv3.GetResponse{
+				Kvs: []*mvccpb.KeyValue{
+					{
+						Key:   []byte("/conf/test_project_key/test/cfg.custom"),
+						Value: []byte("CA"),
+					},
+				},
+			},
+		},
+	}
+
+	sail := New(&MetaConfig{
+		ETCDEndpoints: "127.0.0.1:2379",
+		LogLevel:      "DEBUG",
+		ProjectKey:    "test_project_key",
+		Namespace:     "test",
+		NamespaceKey:  "NTUZNTNQNUKYEL4GP5SGVDV9LEYZAWBD",
+	})
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sail.configs = tt.configs
+			sail.etcdClient = &clientv3.Client{
+				KV: &mockKV{KV: clientv3.NewKVFromKVClient(nil, nil), response: tt.response},
+			}
+
+			if tt.name == "TEST1" {
+				sail.vipers = make(map[string]*viper.Viper)
+				err := sail.pullETCDConfig()
+				assert.NoError(t, err)
+
+				viperC, ok := sail.vipers[tt.configs[0]]
+				assert.Equal(t, true, ok)
+
+				database := viperC.GetString("database")
+				assert.Equal(t, "127.0.0.1:3306", database)
+
+				viperR, ok := sail.vipers[tt.configs[1]]
+				assert.Equal(t, true, ok)
+
+				host := viperR.GetString("host")
+				assert.Equal(t, "0.0.0.0", host)
+
+			} else if tt.name == "TEST2" {
+				sail.vipers = make(map[string]*viper.Viper)
+				err := sail.pullETCDConfig()
+				assert.NoError(t, err)
+
+				viperC, ok := sail.vipers[tt.configs[0]]
+				assert.Equal(t, true, ok)
+
+				database := viperC.GetString("database")
+				assert.Equal(t, "127.0.0.1:3306", database)
+
+				_, ok = sail.vipers["redis.properties"]
+				assert.Equal(t, false, ok)
+			} else if tt.name == "TEST3" {
+				sail.vipers = make(map[string]*viper.Viper)
+				err := sail.pullETCDConfig()
+				assert.NoError(t, err)
+
+				viperC, ok := sail.vipers[tt.configs[0]]
+				assert.Equal(t, true, ok)
+
+				ca := viperC.GetString(tt.configs[0])
+				assert.Equal(t, "CA", ca)
+			}
+		})
+	}
+}
+
+type mockKV struct {
+	clientv3.KV
+	response *clientv3.GetResponse
+}
+
+func (kv *mockKV) Get(ctx context.Context, key string, opts ...clientv3.OpOption) (*clientv3.GetResponse, error) {
+	return kv.response, nil
 }

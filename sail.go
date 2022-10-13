@@ -1,17 +1,18 @@
 package sail
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"net"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/HYY-yu/seckill.pkg/pkg/encrypt"
 	jww "github.com/spf13/jwalterweatherman"
 	"github.com/spf13/viper"
 	"go.etcd.io/etcd/client/pkg/v3/fileutil"
@@ -205,60 +206,27 @@ func (s *Sail) Pull() error {
 	if err != nil {
 		if err == context.DeadlineExceeded && !fileutil.DirEmpty(s.metaConfig.ConfigFilePath) {
 			s.l.Warn("using local file because can't connect etcd, the connection will retry after 30s. ")
-			dirFiles, err := fileutil.ReadDir(s.metaConfig.ConfigFilePath)
+			err := s.readLocalFileConfig()
 			if err != nil {
-				return fmt.Errorf("read config file path err: %w ", err)
+				return err
 			}
-			// 过滤，只访问 s.configs 内有的
-			configFiles := intersectionSortStringArr(dirFiles, s.configs)
-			if s.metaConfig.MergeConfig {
-				configFiles = []string{MergeConfigName}
-			}
-
-			s.lock.Lock()
-			for _, e := range configFiles {
-				viperFile := viper.New()
-				fileSp := strings.Split(e, ".")
-				if len(fileSp) != 2 {
-					continue
-				}
-				name := fileSp[0]
-				ext := fileSp[1]
-				if ext == "custom" {
-					// viper 不支持，以文件名：文件内容形式塞到viper
-					fileContent, err := os.ReadFile(filepath.Join(s.metaConfig.ConfigFilePath, e))
-					if err != nil {
-						return fmt.Errorf("can't read local file: %s with unknow err: %w ", e, err)
-					}
-					viperFile.Set(e, string(fileContent))
-				} else {
-					viperFile.AddConfigPath(s.metaConfig.ConfigFilePath)
-					viperFile.SetConfigName(name)
-					err = viperFile.ReadInConfig()
-					if err != nil {
-						return fmt.Errorf("can't read local file: %s with unknow err: %w ", e, err)
-					}
-				}
-				s.vipers[e] = viperFile
-			}
-			s.lock.Unlock()
 
 			// 重连 ETCD
 			go s.reconnectEtcd()
 			return nil
 		}
 		return fmt.Errorf("can't connect etcd with unknow err: %w ", err)
-	} else {
-		s.etcdClient = etcdClient
 	}
-	if s.etcdClient == nil {
-		return nil
+	s.etcdClient = etcdClient
+
+	err = s.pullETCDConfig()
+	if err != nil {
+		return err
 	}
-
-
 
 	// 1. 访问ETCD，取对应配置文件
-	// 3. 把读取的配置灌入 viper 中，包装viper，对外提供配置读取服务。
+	// 2. 把读取的配置灌入 viper 中，包装viper，对外提供配置读取服务。
+	// 读取服务
 	// 按 每个config一个Viper的方式灌入，读取时，先设置好读哪个config文件。
 	// 如果不设置，则循环查找。
 	// Custom 类型的配置，请使用一个特殊的key：configname.configtype 获取
@@ -272,6 +240,108 @@ func (s *Sail) Pull() error {
 	//      这个肯定要线程
 
 	return nil
+}
+
+func (s *Sail) pullETCDConfig() error {
+	if len(s.configs) == 0 {
+		// 不获取任何配置，直接退出
+		return nil
+	}
+
+	// s.configs 是有序的，etcd里的key是有序的
+	// 那么，只需要获取 from-key = s.configs[0]   limit=s.configs 即可获取到所有需要的key。
+	keyPrefix := s.getETCDKeyPrefix()
+	formKey := s.configs[0]
+	limit := len(s.configs)
+
+	getResp, err := s.etcdClient.Get(s.ctx,
+		keyPrefix+formKey,
+		clientv3.WithFromKey(),
+		clientv3.WithLimit(int64(limit)),
+	)
+	if err != nil {
+		return fmt.Errorf("read config from etcd err: %w ", err)
+	}
+	etcdKeys := make([]string, 0, len(s.configs))
+	for _, e := range getResp.Kvs {
+		etcdKeys = append(etcdKeys, getConfigFileKeyFrom(string(e.Key)))
+	}
+	if len(etcdKeys) == 0 {
+		return fmt.Errorf("read empty config from etcd! ")
+	}
+
+	insETCDKeys := intersectionSortStringArr(etcdKeys, s.configs)
+	s.lock.Lock()
+	for _, e := range getResp.Kvs {
+		configFileKey := getConfigFileKeyFrom(string(e.Key))
+		for _, ins := range insETCDKeys {
+			if ins == configFileKey {
+				viperETCD := viper.New()
+				configType := strings.TrimPrefix(filepath.Ext(ins), ".")
+				valueReader := bytes.NewBuffer(e.Value)
+
+				// 如果加密了，还要解密
+				_, err := encrypt.NewBase64Encoding().DecodeString(valueReader.String())
+				if err == nil {
+					decryptContent, err := decryptConfigContent(valueReader.String(), s.metaConfig.NamespaceKey)
+					if err != nil {
+						// 报错、跳过，不中断运行。
+						s.l.Error("decrypt config %s err:%w ", configFileKey, err)
+						continue
+					}
+					valueReader = bytes.NewBufferString(decryptContent)
+				}
+
+				if configType == "custom" {
+					viperETCD.Set(configFileKey, valueReader.String())
+				} else {
+					viperETCD.SetConfigType(configType)
+					err = viperETCD.ReadConfig(valueReader)
+					if err != nil {
+						return fmt.Errorf("viper fail: read config from etcd err: %w ", err)
+					}
+				}
+
+				s.vipers[configFileKey] = viperETCD
+			}
+		}
+	}
+	s.lock.Unlock()
+	return nil
+}
+
+func decryptConfigContent(content string, namespaceKey string) (string, error) {
+	if namespaceKey == "" {
+		return "", nil
+	}
+
+	goAES := encrypt.NewGoAES(namespaceKey, encrypt.AES192)
+	decryptContent, err := goAES.WithModel(encrypt.ECB).WithEncoding(encrypt.NewBase64Encoding()).Decrypt(content)
+	if err != nil {
+		return "", err
+	}
+	return decryptContent, nil
+}
+
+// /conf/{project_key}/namespace/config_name.config.type
+func (s *Sail) getETCDKeyPrefix() string {
+	b := strings.Builder{}
+
+	b.WriteString("/conf")
+
+	b.WriteByte('/')
+	b.WriteString(s.metaConfig.ProjectKey)
+
+	b.WriteByte('/')
+	b.WriteString(s.metaConfig.Namespace)
+
+	b.WriteByte('/')
+	return b.String()
+}
+
+func getConfigFileKeyFrom(etcdKey string) string {
+	_, result := filepath.Split(etcdKey)
+	return result
 }
 
 func (s *Sail) reconnectEtcd() {
@@ -290,6 +360,13 @@ func (s *Sail) reconnectEtcd() {
 			}
 			s.etcdClient = etcdClient
 			s.l.Info("reconnect etcd success! ")
+			err = s.pullETCDConfig()
+			if err != nil {
+				s.l.Error("pull etcd config fail, retry in next 30s. ")
+				_ = s.etcdClient.Close()
+				s.etcdClient = nil
+				continue
+			}
 			return
 		}
 	}
