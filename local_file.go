@@ -1,6 +1,7 @@
 package sail
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -28,19 +29,25 @@ func (s *Sail) readLocalFileConfig() error {
 		if len(fileSp) != 2 {
 			continue
 		}
-		name := fileSp[0]
 		ext := fileSp[1]
+		fileContent, err := os.ReadFile(filepath.Join(s.metaConfig.ConfigFilePath, e))
+		if err != nil {
+			return fmt.Errorf("can't read local file: %s with unknow err: %w ", e, err)
+		}
+		fContent := string(fileContent)
+
+		if c := s.tryDecryptConfigContent(e, fContent); len(c) > 0 {
+			fContent = c
+		} else {
+			continue
+		}
+
 		if ext == "custom" {
 			// viper 不支持的格式，就以文件名：文件内容形式塞到viper
-			fileContent, err := os.ReadFile(filepath.Join(s.metaConfig.ConfigFilePath, e))
-			if err != nil {
-				return fmt.Errorf("can't read local file: %s with unknow err: %w ", e, err)
-			}
-			viperFile.Set(e, string(fileContent))
+			viperFile.Set(e, fContent)
 		} else {
-			viperFile.AddConfigPath(s.metaConfig.ConfigFilePath)
-			viperFile.SetConfigName(name)
-			err = viperFile.ReadInConfig()
+			viperFile.SetConfigType(ext)
+			err = viperFile.ReadConfig(bytes.NewBufferString(fContent))
 			if err != nil {
 				return fmt.Errorf("can't read local file: %s with unknow err: %w ", e, err)
 			}

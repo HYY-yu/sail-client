@@ -280,16 +280,10 @@ func (s *Sail) pullETCDConfig() error {
 				configType := strings.TrimPrefix(filepath.Ext(ins), ".")
 				valueReader := bytes.NewBuffer(e.Value)
 
-				// 如果加密了，还要解密
-				_, err := encrypt.NewBase64Encoding().DecodeString(valueReader.String())
-				if err == nil {
-					decryptContent, err := decryptConfigContent(valueReader.String(), s.metaConfig.NamespaceKey)
-					if err != nil {
-						// 报错、跳过，不中断运行。
-						s.l.Error("decrypt config %s err:%w ", configFileKey, err)
-						continue
-					}
-					valueReader = bytes.NewBufferString(decryptContent)
+				if c := s.tryDecryptConfigContent(configFileKey, valueReader.String()); len(c) > 0 {
+					valueReader = bytes.NewBufferString(c)
+				} else {
+					continue
 				}
 
 				if configType == "custom" {
@@ -308,6 +302,20 @@ func (s *Sail) pullETCDConfig() error {
 	}
 	s.lock.Unlock()
 	return nil
+}
+
+func (s *Sail) tryDecryptConfigContent(configKey, content string) string {
+	_, err := encrypt.NewBase64Encoding().DecodeString(content)
+	if err == nil {
+		decryptContent, err := decryptConfigContent(content, s.metaConfig.NamespaceKey)
+		if err != nil {
+			// 报错、跳过，不中断运行。
+			s.l.Error("decrypt config %s err:%w ", configKey, err)
+			return ""
+		}
+		content = decryptContent
+	}
+	return content
 }
 
 func decryptConfigContent(content string, namespaceKey string) (string, error) {
