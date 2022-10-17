@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestSail_readLocalFileConfig(t *testing.T) {
@@ -41,7 +42,7 @@ func TestSail_readLocalFileConfig(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			sail.configs = tt.configs
 			err := sail.readLocalFileConfig()
-			assert.NoError(t, err)
+			require.NoError(t, err)
 
 			for i, e := range tt.configs {
 				viperS, ok := sail.vipers[e]
