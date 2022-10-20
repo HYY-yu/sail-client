@@ -24,6 +24,8 @@ import (
 
 const MergeConfigName = "config.toml"
 
+type OnConfigChange func(configFileKey string, s *Sail)
+
 type MetaConfig struct {
 	ETCDEndpoints string `toml:"etcd_endpoints"` // 逗号分隔的ETCD地址，0.0.0.0:2379,0.0.0.0:12379,0.0.0.0:22379
 	ETCDUsername  string `toml:"etcd_username"`
@@ -111,6 +113,8 @@ type Sail struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
+	changeFunc OnConfigChange
+
 	err error
 }
 
@@ -172,6 +176,12 @@ func WithConfigPath(configPath string) Option {
 	})
 }
 
+func WithOnConfigChange(f OnConfigChange) Option {
+	return optionFunc(func(v *Sail) {
+		v.changeFunc = f
+	})
+}
+
 // WithLogger
 // TODO 在文档中说明，强烈建议替换为项目自己的Logger，这样可以实时变化 loggerLevel
 func WithLogger(logger logger.Logger) Option {
@@ -217,6 +227,7 @@ func (s *Sail) Pull() error {
 		}
 		return fmt.Errorf("can't connect etcd with unknow err: %w ", err)
 	}
+	s.l.Debug("connect etcd success. ")
 	s.etcdClient = etcdClient
 
 	err = s.pullETCDConfig()
@@ -224,20 +235,14 @@ func (s *Sail) Pull() error {
 		return err
 	}
 
-	// 1. 访问ETCD，取对应配置文件
-	// 2. 把读取的配置灌入 viper 中，包装viper，对外提供配置读取服务。
-	// 读取服务
-	// 按 每个config一个Viper的方式灌入，读取时，先设置好读哪个config文件。
-	// 如果不设置，则循环查找。
-	// Custom 类型的配置，请使用一个特殊的key：configname.configtype 获取
-
 	// 其它：
 	// fileMaintainer
 	// 2. 如果设置了ConfigPath，检查Path里有没有配置文件（如果设置了mergeConfig还要merge），有则更新、新增、删除等。(研究是否可以利用Viper)
-	//      这个要起个线程，后台弄比较好
-	// ETCDWatcher
-	// 3. 与ETCD建立长链接，WatchKey变化（这个一定要自己做）
-	//      这个肯定要线程
+	// 1. pullETCDConfig后，把viper内的配置全部写成文件。
+	// 2. 如果设置mergeConfig，则mergeViper后，再写成文件。
+	// 3. 有watch事件，把对应viper的配置重新写成文件。
+	// 4. 有mergeConfig，重新mergeViper，覆盖写。
+	// 不解密配置。
 
 	return nil
 }
@@ -253,6 +258,7 @@ func (s *Sail) pullETCDConfig() error {
 	keyPrefix := s.getETCDKeyPrefix()
 	formKey := s.configs[0]
 	limit := len(s.configs)
+	s.l.Debug("pull config key", "keys", s.configs)
 
 	getResp, err := s.etcdClient.Get(s.ctx,
 		keyPrefix+formKey,
@@ -271,37 +277,52 @@ func (s *Sail) pullETCDConfig() error {
 	}
 
 	insETCDKeys := intersectionSortStringArr(etcdKeys, s.configs)
+	s.l.Debug("real config key", "keys", insETCDKeys)
+
 	s.lock.Lock()
+	defer s.lock.Unlock()
+
 	for _, e := range getResp.Kvs {
 		configFileKey := getConfigFileKeyFrom(string(e.Key))
 		for _, ins := range insETCDKeys {
 			if ins == configFileKey {
-				viperETCD := viper.New()
-				configType := strings.TrimPrefix(filepath.Ext(ins), ".")
-				valueReader := bytes.NewBuffer(e.Value)
-
-				if c := s.tryDecryptConfigContent(configFileKey, valueReader.String()); len(c) > 0 {
-					valueReader = bytes.NewBufferString(c)
-				} else {
-					continue
+				viperETCD, err := s.newViperWithETCDValue(configFileKey, e.Value)
+				if err != nil {
+					return nil
 				}
-
-				if configType == "custom" {
-					viperETCD.Set(configFileKey, valueReader.String())
-				} else {
-					viperETCD.SetConfigType(configType)
-					err = viperETCD.ReadConfig(valueReader)
-					if err != nil {
-						return fmt.Errorf("viper fail: read config from etcd err: %w ", err)
-					}
+				if viperETCD == nil {
+					continue
 				}
 
 				s.vipers[configFileKey] = viperETCD
 			}
 		}
 	}
-	s.lock.Unlock()
 	return nil
+}
+
+func (s *Sail) newViperWithETCDValue(configFileKey string, etcdValue []byte) (*viper.Viper, error) {
+	viperETCD := viper.New()
+	configType := strings.TrimPrefix(filepath.Ext(configFileKey), ".")
+	valueReader := bytes.NewBuffer(etcdValue)
+
+	if c := s.tryDecryptConfigContent(configFileKey, valueReader.String()); len(c) > 0 {
+		valueReader = bytes.NewBufferString(c)
+	} else {
+		s.l.Error("decrypt config fail, skip it. ", "key", configFileKey)
+		return nil, nil
+	}
+
+	if configType == "custom" {
+		viperETCD.Set(configFileKey, valueReader.String())
+	} else {
+		viperETCD.SetConfigType(configType)
+		err := viperETCD.ReadConfig(valueReader)
+		if err != nil {
+			return nil, fmt.Errorf("viper fail: read config from etcd err: %w ", err)
+		}
+	}
+	return viperETCD, nil
 }
 
 func (s *Sail) tryDecryptConfigContent(configKey, content string) string {
@@ -381,6 +402,7 @@ func (s *Sail) reconnectEtcd() {
 }
 
 func (s *Sail) etcdConnect() (*clientv3.Client, error) {
+	s.l.Debug("start to connect etcd. ")
 	v3cfg := &clientv3.Config{
 		Endpoints:            s.etcdEndpoints,
 		AutoSyncInterval:     time.Minute,

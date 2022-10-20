@@ -305,6 +305,9 @@ func (s *Sail) GetViperWithName(name string) *viper.Viper {
 
 func (s *Sail) MergeVipers() (*viper.Viper, error) {
 	newViper := viper.New()
+	s.lock.RLock()
+	defer s.lock.RUnlock()
+
 	for _, v := range s.vipers {
 		err := newViper.MergeConfigMap(v.AllSettings())
 		if err != nil {
@@ -316,6 +319,9 @@ func (s *Sail) MergeVipers() (*viper.Viper, error) {
 
 func (s *Sail) MergeVipersWithName() (*viper.Viper, error) {
 	newViper := viper.New()
+	s.lock.RLock()
+	defer s.lock.RUnlock()
+
 	for k, v := range s.vipers {
 		dataMap := v.AllSettings()
 
@@ -335,6 +341,8 @@ func (s *Sail) rangeVipers(key string) (interface{}, error) {
 	}
 	var result interface{}
 	var duResult []string
+
+	s.lock.RLock()
 	for k, v := range s.vipers {
 		if ok := v.IsSet(key); ok {
 			vv := v.Get(key)
@@ -344,6 +352,8 @@ func (s *Sail) rangeVipers(key string) (interface{}, error) {
 			duResult = append(duResult, k)
 		}
 	}
+	s.lock.RUnlock()
+
 	if len(duResult) > 1 {
 		return result, &GetError{
 			Err:   ErrDuplicateKey,
