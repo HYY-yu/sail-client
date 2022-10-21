@@ -115,6 +115,8 @@ type Sail struct {
 
 	changeFunc OnConfigChange
 
+	fm *FileMaintainer
+
 	err error
 }
 
@@ -151,6 +153,7 @@ func New(meta *MetaConfig, opts ...Option) *Sail {
 		opt.apply(s)
 	}
 
+	s.fm = NewFileMaintainer(s)
 	return s
 }
 
@@ -235,15 +238,6 @@ func (s *Sail) Pull() error {
 		return err
 	}
 
-	// 其它：
-	// fileMaintainer
-	// 2. 如果设置了ConfigPath，检查Path里有没有配置文件（如果设置了mergeConfig还要merge），有则更新、新增、删除等。(研究是否可以利用Viper)
-	// 1. pullETCDConfig后，把viper内的配置全部写成文件。
-	// 2. 如果设置mergeConfig，则mergeViper后，再写成文件。
-	// 3. 有watch事件，把对应viper的配置重新写成文件。
-	// 4. 有mergeConfig，重新mergeViper，覆盖写。
-	// 不解密配置。
-
 	return nil
 }
 
@@ -280,14 +274,13 @@ func (s *Sail) pullETCDConfig() error {
 	s.l.Debug("real config key", "keys", insETCDKeys)
 
 	s.lock.Lock()
-	defer s.lock.Unlock()
-
 	for _, e := range getResp.Kvs {
 		configFileKey := getConfigFileKeyFrom(string(e.Key))
 		for _, ins := range insETCDKeys {
 			if ins == configFileKey {
 				viperETCD, err := s.newViperWithETCDValue(configFileKey, e.Value)
 				if err != nil {
+					s.lock.Unlock()
 					return nil
 				}
 				if viperETCD == nil {
@@ -297,6 +290,12 @@ func (s *Sail) pullETCDConfig() error {
 				s.vipers[configFileKey] = viperETCD
 			}
 		}
+	}
+	s.lock.Unlock()
+
+	err = s.fm.saveConfigFile()
+	if err != nil {
+		return err
 	}
 	return nil
 }

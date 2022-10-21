@@ -78,6 +78,8 @@ func (e *etcdWatcher) dealETCDMsg(key string, value []byte) {
 	e.s.vipers[configFileKey] = viperETCD
 	e.s.lock.Unlock()
 
+	e.s.fm.asyncWriteConfigFile(configFileKey)
+
 	if e.s.changeFunc != nil {
 		e.s.changeFunc(key, e.s)
 	}
