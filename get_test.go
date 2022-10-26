@@ -57,14 +57,12 @@ func TestSail_MergeVipers(t *testing.T) {
 		{
 			name: "TEST1",
 			key: []string{
-				"host",
 				"username",
 				"db_config.maxConnections",
 				"temp.custom",
 				"sail.etcd_username",
 			},
 			value: []interface{}{
-				"0.0.0.0",
 				"root",
 				50,
 				"ca",
