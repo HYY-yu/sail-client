@@ -115,7 +115,8 @@ type Sail struct {
 
 	changeFunc OnConfigChange
 
-	fm *FileMaintainer
+	fm      *FileMaintainer
+	watcher Watcher
 
 	err error
 }
@@ -154,6 +155,8 @@ func New(meta *MetaConfig, opts ...Option) *Sail {
 	}
 
 	s.fm = NewFileMaintainer(s)
+	s.watcher = NewWatcher(s.ctx, s, s.getETCDKeyPrefix(), s.etcdClient)
+
 	return s
 }
 
@@ -297,6 +300,8 @@ func (s *Sail) pullETCDConfig() error {
 	if err != nil {
 		return err
 	}
+
+	s.watcher.Run()
 	return nil
 }
 
