@@ -14,30 +14,29 @@ type Watcher interface {
 type etcdWatcher struct {
 	s *Sail
 
-	ctx       context.Context
-	cancel    context.CancelFunc
-	keyPrefix string
-
-	etcdClient *clientv3.Client
+	ctx    context.Context
+	cancel context.CancelFunc
 }
 
-func NewWatcher(ctx context.Context, s *Sail, keyPrefix string, etcdClient *clientv3.Client) Watcher {
+func NewWatcher(ctx context.Context, s *Sail) Watcher {
 	ctx, cancel := context.WithCancel(ctx)
 
 	etcdW := &etcdWatcher{
-		s:          s,
-		ctx:        ctx,
-		cancel:     cancel,
-		etcdClient: etcdClient,
-		keyPrefix:  keyPrefix,
+		s:      s,
+		ctx:    ctx,
+		cancel: cancel,
 	}
 	return etcdW
 }
 
 func (e *etcdWatcher) Run() {
-	wc := e.etcdClient.Watch(
+	if e.s.etcdClient.Watcher == nil {
+		return
+	}
+
+	wc := e.s.etcdClient.Watch(
 		e.ctx,
-		e.keyPrefix,
+		e.s.getETCDKeyPrefix(),
 		clientv3.WithPrefix(),
 	)
 

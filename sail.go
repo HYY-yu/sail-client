@@ -155,7 +155,7 @@ func New(meta *MetaConfig, opts ...Option) *Sail {
 	}
 
 	s.fm = NewFileMaintainer(s)
-	s.watcher = NewWatcher(s.ctx, s, s.getETCDKeyPrefix(), s.etcdClient)
+	s.watcher = NewWatcher(s.ctx, s)
 
 	return s
 }

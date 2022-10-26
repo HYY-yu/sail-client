@@ -57,7 +57,7 @@ func Test_etcdWatcher_dealETCDMsg(t *testing.T) {
 			err := sail.pullETCDConfig()
 			require.NoError(t, err)
 
-			e := NewWatcher(sail.ctx, sail, sail.getETCDKeyPrefix(), sail.etcdClient)
+			e := NewWatcher(sail.ctx, sail)
 			ee := e.(*etcdWatcher)
 
 			db, err := sail.GetString("database")

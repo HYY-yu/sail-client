@@ -30,6 +30,10 @@ func NewFileMaintainer(sail *Sail) *FileMaintainer {
 }
 
 func (f *FileMaintainer) saveConfigFile() error {
+	if len(f.sail.metaConfig.ConfigFilePath) == 0 {
+		return nil
+	}
+
 	if f.sail.metaConfig.MergeConfig {
 		mergeViper, err := f.sail.MergeVipersWithName()
 		if err != nil {
