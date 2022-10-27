@@ -9,7 +9,7 @@ import (
 )
 
 func main() {
-	sail := sailclient.NewWithToml("./cfg.toml")
+	sail := sailclient.NewWithToml("./conf/cfg.toml")
 	if sail.Err() != nil {
 		log.Fatalln(sail.Err())
 	}
