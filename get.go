@@ -303,6 +303,8 @@ func (s *Sail) GetViperWithName(name string) *viper.Viper {
 	return v
 }
 
+// MergeVipers 把所有配置文件中的配置合并到一个 Viper 实例
+// 如果有重名的配置，则会出现未定义行为，为保证安全，有重名配置请使用 MergeVipersWithName。
 func (s *Sail) MergeVipers() (*viper.Viper, error) {
 	newViper := viper.New()
 	s.lock.RLock()
@@ -317,6 +319,13 @@ func (s *Sail) MergeVipers() (*viper.Viper, error) {
 	return newViper, nil
 }
 
+// MergeVipersWithName 把所有配置文件中的配置合并到 Viper
+// 每个配置文件的配置都会加上文件名前缀，所以不怕有重名。
+// 例子：
+// mysql.toml
+// key="va"
+// MergeVipersWithName 后：
+// viper.Get("mysql.toml.key")
 func (s *Sail) MergeVipersWithName() (*viper.Viper, error) {
 	newViper := viper.New()
 	s.lock.RLock()

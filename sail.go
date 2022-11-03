@@ -170,18 +170,23 @@ func (fn optionFunc) apply(v *Sail) {
 	fn(v)
 }
 
+// WithConfigs 指定获取哪些配置文件，传空则不获取任何配置。
 func WithConfigs(configs []string) Option {
 	return optionFunc(func(v *Sail) {
 		v.configs = configs
 	})
 }
 
+// WithConfigPath 指定备份配置文件的存储路径，为空则不存储备份配置文件
 func WithConfigPath(configPath string) Option {
 	return optionFunc(func(v *Sail) {
 		v.metaConfig.ConfigFilePath = configPath
 	})
 }
 
+// WithOnConfigChange 配置变更回调
+// configFileKey 变更的配置文件名
+// s 更新后的 sail 实例
 func WithOnConfigChange(f OnConfigChange) Option {
 	return optionFunc(func(v *Sail) {
 		v.changeFunc = f
@@ -189,30 +194,41 @@ func WithOnConfigChange(f OnConfigChange) Option {
 }
 
 // WithLogger
-// TODO 在文档中说明，强烈建议替换为项目自己的Logger，这样可以实时变化 loggerLevel
+// 强烈建议替换为自己的Logger，自带的 logger 比较简单
 func WithLogger(logger logger.Logger) Option {
 	return optionFunc(func(v *Sail) {
 		v.l = logger
 	})
 }
 
-// WithMergeConfig 将所有的配置都放到一个文件: config.toml
+// WithMergeConfig 将所有的配置都合并到一个文件: config.toml
+// 需要先指定 ConfigFilePath
 func WithMergeConfig(merge bool) Option {
 	return optionFunc(func(v *Sail) {
 		v.metaConfig.MergeConfig = merge
 	})
 }
 
+// WithETCDClientConfig 自定义的 ETCD 连接配置
 func WithETCDClientConfig(cfg *clientv3.Config) Option {
 	return optionFunc(func(v *Sail) {
 		v.etcdConfig = cfg
 	})
 }
 
+// Err 初始化（New）时，失败的 Error 会保存在此处
+// 例：
+// s := sail.New()
+// err := s.Err()
+// if err != nil{
+//    doing...
+// }
 func (s *Sail) Err() error {
 	return s.err
 }
 
+// Pull 配置拉取
+// 当无法访问 ETCD 时，会自动导入备份配置文件中的配置，同时自动重连 etcd。
 func (s *Sail) Pull() error {
 	if s.Err() != nil {
 		return s.Err()

@@ -9,7 +9,12 @@ import (
 )
 
 func main() {
-	sail := sailclient.NewWithToml("./conf/cfg.toml")
+	sail := sailclient.NewWithToml("./cfg.toml",
+		sailclient.WithOnConfigChange(func(configFileKey string, s *sailclient.Sail) {
+			log.Println("find key change - ", configFileKey)
+
+			log.Println("new value: ", s.MustGetString("test.log"))
+		}))
 	if sail.Err() != nil {
 		log.Fatalln(sail.Err())
 	}
