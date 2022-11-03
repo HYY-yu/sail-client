@@ -9,6 +9,6 @@ WORKDIR /app
 # generate a service binary
 COPY service /app/service
 COPY cmd/cfg.toml /app/cfg.toml
-RUN mkdir conf
+RUN mkdir -p ./conf
 
 ENTRYPOINT ["./service"]
