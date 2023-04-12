@@ -351,3 +351,43 @@ type mockKV struct {
 func (kv *mockKV) Get(ctx context.Context, key string, opts ...clientv3.OpOption) (*clientv3.GetResponse, error) {
 	return kv.response, nil
 }
+
+func TestSail_checkPublish(t *testing.T) {
+	type args struct {
+		etcdValue []byte
+	}
+	tests := []struct {
+		name          string
+		args          args
+		wantIsPublish bool
+		wantReversion int
+	}{
+		{
+			name:          "test1",
+			args:          struct{ etcdValue []byte }{etcdValue: []byte("PUBLISH&FFDSFSD&1&22&FDSFfeafdfae==")},
+			wantIsPublish: true,
+			wantReversion: 22,
+		},
+		{
+			name:          "test2",
+			args:          struct{ etcdValue []byte }{etcdValue: []byte("")},
+			wantIsPublish: false,
+			wantReversion: 0,
+		},
+	}
+	sail := New(&MetaConfig{
+		ETCDEndpoints: "127.0.0.1:2379",
+		LogLevel:      "DEBUG",
+		ProjectKey:    "test_project_key",
+		Namespace:     "test",
+		NamespaceKey:  "NTUZNTNQNUKYEL4GP5SGVDV9LEYZAWBD",
+	})
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotIsPublish, gotReversion := sail.checkPublish(tt.args.etcdValue)
+			assert.Equalf(t, tt.wantIsPublish, gotIsPublish, "checkPublish(%v)", tt.args.etcdValue)
+			assert.Equalf(t, tt.wantReversion, gotReversion, "checkPublish(%v)", tt.args.etcdValue)
+		})
+	}
+}
