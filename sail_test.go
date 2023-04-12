@@ -364,7 +364,7 @@ func TestSail_checkPublish(t *testing.T) {
 	}{
 		{
 			name:          "test1",
-			args:          struct{ etcdValue []byte }{etcdValue: []byte("PUBLISH&FFDSFSD&1&22&FDSFfeafdfae==")},
+			args:          struct{ etcdValue []byte }{etcdValue: []byte("PUBLISH&THIS_IS_TOKEN&1&22&SecretData==")},
 			wantIsPublish: true,
 			wantReversion: 22,
 		},
