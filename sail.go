@@ -8,6 +8,7 @@ import (
 	"net"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -297,10 +298,20 @@ func (s *Sail) pullETCDConfig() error {
 		configFileKey := getConfigFileKeyFrom(string(e.Key))
 		for _, ins := range insETCDKeys {
 			if ins == configFileKey {
+				isPublish, reversion := s.checkPublish(e.Value)
+				if isPublish {
+					newValue, err := s.readFromReversion(e.Key, int64(reversion))
+					if err != nil {
+						s.lock.Unlock()
+						return err
+					}
+					e.Value = newValue
+				}
+
 				viperETCD, err := s.newViperWithETCDValue(configFileKey, e.Value)
 				if err != nil {
 					s.lock.Unlock()
-					return nil
+					return err
 				}
 				if viperETCD == nil {
 					continue
@@ -319,6 +330,37 @@ func (s *Sail) pullETCDConfig() error {
 
 	s.watcher.Run()
 	return nil
+}
+
+func (s *Sail) checkPublish(etcdValue []byte) (isPublish bool, reversion int) {
+	etcdValueStr := string(etcdValue)
+
+	if strings.HasPrefix(etcdValueStr, "PUBLISH") {
+		publishStrArr := strings.Split(etcdValueStr, "&")
+
+		if len(publishStrArr) != 5 {
+			return false, 0
+		}
+
+		reversion, _ := strconv.Atoi(publishStrArr[3])
+		return true, reversion
+	}
+	return false, 0
+}
+
+func (s *Sail) readFromReversion(etcdKey []byte, reversion int64) ([]byte, error) {
+	getResp, err := s.etcdClient.Get(s.ctx,
+		string(etcdKey),
+		clientv3.WithRev(reversion),
+	)
+	if err != nil {
+		return nil, err
+	}
+	if len(getResp.Kvs) == 0 {
+		return nil, fmt.Errorf("cannot find etcdKey: %s", string(etcdKey))
+	}
+
+	return getResp.Kvs[0].Value, nil
 }
 
 func (s *Sail) newViperWithETCDValue(configFileKey string, etcdValue []byte) (*viper.Viper, error) {

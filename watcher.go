@@ -47,6 +47,12 @@ func (e *etcdWatcher) Run() {
 				for _, ev := range we.Events {
 					switch ev.Type {
 					case mvccpb.PUT:
+						isPublish, _ := e.s.checkPublish(ev.Kv.Value)
+						if isPublish {
+							// 忽略 Publish 消息推送
+							continue
+						}
+
 						e.dealETCDMsg(string(ev.Kv.Key), ev.Kv.Value)
 					case mvccpb.DELETE:
 						//do nothing with delete event
