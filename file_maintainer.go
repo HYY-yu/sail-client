@@ -84,6 +84,18 @@ func (f *FileMaintainer) asyncWriteConfigFile(configFileKey string) {
 		f.sail.lock.RLock()
 		defer f.sail.lock.RUnlock()
 
+		if f.sail.metaConfig.MergeConfig {
+			mergeViper, err := f.sail.MergeVipersWithName()
+			if err != nil {
+				f.sail.l.Error("merged merge config file fail. ", "config_file", configFileKey)
+			}
+			err = mergeViper.WriteConfigAs(filepath.Join(f.sail.metaConfig.ConfigFilePath, MergeConfigName))
+			if err != nil {
+				f.sail.l.Error("merged refresh config file fail. ", "config_file", configFileKey)
+			}
+			return
+		}
+
 		v, ok := f.sail.vipers[configFileKey]
 		if !ok {
 			return
